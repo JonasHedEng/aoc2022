@@ -1,13 +1,9 @@
 import gleam/list
 import gleam/int
 import gleam/io
-import gleam/iterator
-import gleam/pair
-import gleam/set.{Set}
+import gleam/order.{Eq, Gt, Lt}
 import gleam/string
 import gleam/erlang/file
-
-const item_types = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 fn load_input_lines() -> List(String) {
   assert Ok(content) = file.read("input.txt")
@@ -16,59 +12,64 @@ fn load_input_lines() -> List(String) {
   |> list.filter(fn(line) { !string.is_empty(line) })
 }
 
-fn priority(for item_type: String) -> Int {
-  let item_type_list =
-    item_types
-    |> string.to_graphemes
-  let enumerated =
-    item_type_list
-    |> iterator.from_list
-    |> iterator.index
-
-  assert Ok(#(index, _)) =
-    enumerated
-    |> iterator.find(fn(en) { pair.second(en) == item_type })
-
-  index + 1
+type Range {
+  Range(from: Int, to: Int)
 }
 
-fn overlapping_sets(among sets: List(Set(String))) -> Set(String) {
-  case sets {
-    [x] -> x
-    [x, ..rest] -> set.intersection(x, overlapping_sets(rest))
+type Relation {
+  Disjoint
+  Overlapping
+  Contained
+}
+
+fn relation_between(range_pair: #(Range, Range)) -> Relation {
+  let #(a, b) = range_pair
+  let from_comp = int.compare(a.from, b.from)
+  let to_comp = int.compare(a.to, b.to)
+
+  let is_disjoint = b.from - a.to > 0 || a.from - b.to > 0
+
+  case is_disjoint {
+    True -> Disjoint
+    False -> case from_comp, to_comp {
+      Eq, _ | _, Eq -> Contained
+      Lt, Gt | Gt, Lt -> Contained
+      Lt, Lt | Gt, Gt -> Overlapping
+    }
   }
 }
 
-fn find_overlap(among group: List(String)) -> String {
-  let groups_types: List(Set(String)) =
-    group
-    |> list.map(string.to_graphemes)
-    |> list.map(set.from_list)
+fn parse_range(raw: String) -> Range {
+  assert Ok([from, to]) =
+    raw
+    |> string.split(on: "-")
+    |> list.try_map(int.parse)
 
-  let overlap_set = overlapping_sets(among: groups_types)
-  let overlap =
-    overlap_set
-    |> set.to_list
-    |> string.concat
-  overlap
+  Range(from: from, to: to)
+}
+
+fn parse_range_pairs(lines: List(String)) -> List(#(Range, Range)) {
+  lines
+  |> list.map(fn(line) {
+    assert Ok(#(first, second)) =
+      line
+      |> string.split_once(on: ",")
+
+    #(parse_range(first), parse_range(second))
+  })
 }
 
 pub fn main() {
   let lines = load_input_lines()
 
-  let groups =
+  let parsed =
     lines
-    |> list.sized_chunk(into: 3)
+    |> parse_range_pairs
 
-  let overlapping =
-    groups
-    |> list.map(find_overlap)
-  let scores =
-    overlapping
-    |> list.map(priority)
+  let contained =
+    parsed
+    |> list.map(relation_between)
+    |> list.filter(fn(r) { r == Contained || r == Overlapping })
 
-  io.debug(
-    scores
-    |> int.sum,
-  )
+  io.debug(list.length(contained))
 }
