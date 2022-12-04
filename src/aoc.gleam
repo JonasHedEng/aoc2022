@@ -1,118 +1,74 @@
-import gleam/erlang/file
 import gleam/list
 import gleam/int
 import gleam/io
-import gleam/order.{Eq, Gt, Lt, Order}
+import gleam/iterator
+import gleam/pair
+import gleam/set.{Set}
 import gleam/string
+import gleam/erlang/file
+
+const item_types = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 fn load_input_lines() -> List(String) {
   assert Ok(content) = file.read("input.txt")
 
   string.split(content, on: "\n")
+  |> list.filter(fn(line) { !string.is_empty(line) })
 }
 
-type Action {
-  Rock
-  Paper
-  Scissor
+fn priority(for item_type: String) -> Int {
+  let item_type_list =
+    item_types
+    |> string.to_graphemes
+  let enumerated =
+    item_type_list
+    |> iterator.from_list
+    |> iterator.index
+
+  assert Ok(#(index, _)) =
+    enumerated
+    |> iterator.find(fn(en) { pair.second(en) == item_type })
+
+  index + 1
 }
 
-type Result {
-  Loss
-  Draw
-  Win
-}
-
-fn parse_action(from str: String) -> Action {
-  case str {
-    "A" -> Rock
-    "B" -> Paper
-    "C" -> Scissor
+fn overlapping_sets(among sets: List(Set(String))) -> Set(String) {
+  case sets {
+    [x] -> x
+    [x, ..rest] -> set.intersection(x, overlapping_sets(rest))
   }
 }
 
-fn parse_wanted_result(from str: String) -> Result {
-  case str {
-    "X" -> Loss
-    "Y" -> Draw
-    "Z" -> Win
-  }
-}
+fn find_overlap(among group: List(String)) -> String {
+  let groups_types: List(Set(String)) =
+    group
+    |> list.map(string.to_graphemes)
+    |> list.map(set.from_list)
 
-fn action_for(result: Result, against action: Action) -> Action {
-  case action, result {
-    Rock, Draw -> Rock
-    Rock, Win -> Paper
-    Rock, Loss -> Scissor
-
-    Paper, Loss -> Rock
-    Paper, Draw -> Paper
-    Paper, Win -> Scissor
-
-    Scissor, Win -> Rock
-    Scissor, Loss -> Paper
-    Scissor, Draw -> Scissor
-  }
-}
-
-fn round_to_score(wanted_result: Result) -> Int {
-  case wanted_result {
-    Loss -> 0
-    Draw -> 3
-    Win -> 6
-  }
-}
-
-fn action_to_score(act: Action) -> Int {
-  case act {
-    Rock -> 1
-    Paper -> 2
-    Scissor -> 3
-  }
-}
-
-fn result(action: Action, wanted_result: Result) -> List(Int) {
-  let my_action = action_for(wanted_result, against: action)
-  let round_score = round_to_score(wanted_result)
-  let action_score = action_to_score(my_action)
-
-  [action_score, round_score]
-}
-
-fn rock_paper_scissors(lines: List(String)) -> List(List(Int)) {
-  let raw_rounds =
-    lines
-    |> list.filter(fn(line) { line != "" })
-    |> list.map(fn(line) { string.split(line, " ") })
-
-  let rounds =
-    raw_rounds
-    |> list.map(fn(raw_round) {
-      let [raw_action, raw_result] = raw_round
-
-      let opponent_action = parse_action(raw_action)
-      let wanted_result = parse_wanted_result(raw_result)
-
-      #(opponent_action, wanted_result)
-    })
-
-  let scores =
-    rounds
-    |> list.map(fn(plan) {
-      let #(action, wanted_result) = plan
-      result(action, wanted_result)
-    })
-
-  scores
+  let overlap_set = overlapping_sets(among: groups_types)
+  let overlap =
+    overlap_set
+    |> set.to_list
+    |> string.concat
+  overlap
 }
 
 pub fn main() {
   let lines = load_input_lines()
-  let scores = rock_paper_scissors(lines)
 
-  let total_score =
+  let groups =
+    lines
+    |> list.sized_chunk(into: 3)
+
+  let overlapping =
+    groups
+    |> list.map(find_overlap)
+  let scores =
+    overlapping
+    |> list.map(priority)
+
+  io.debug(
     scores
-    |> list.flatten
-    |> int.sum
-  io.println(int.to_string(total_score))
+    |> int.sum,
+  )
 }
