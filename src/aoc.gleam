@@ -1,10 +1,9 @@
 import gleam/list
 import gleam/int
 import gleam/io
+import gleam/result
 import gleam/string
 import gleam/erlang/file
-
-const max_dir_size = 100_000
 
 fn load_input_lines() -> List(String) {
   assert Ok(content) = file.read("input.txt")
@@ -13,170 +12,134 @@ fn load_input_lines() -> List(String) {
   |> list.filter(fn(line) { !string.is_empty(line) })
 }
 
-type Command {
-  CdUp
-  Cd(path: String)
-  Ls
+type Grid {
+  Grid(rows: List(List(Int)))
 }
 
-type FsTree {
-  Dir(name: String, size: Int, sub_trees: List(FsTree))
-  File(name: String, size: Int)
-}
+type Coord =
+  #(Int, Int)
 
-fn fs_size(node: FsTree) -> Int {
-  case node {
-    Dir(_, size, _) -> size
-    File(_, size) -> size
-  }
-}
-
-fn parse_command(command: String) -> Command {
-  let command_parts = string.split(command, " ")
-  case command_parts {
-    ["$", "ls"] -> Ls
-    ["$", "cd", ".."] -> CdUp
-    ["$", "cd", path] -> Cd(path: path)
-  }
-}
-
-fn parse_directory_entry(raw_entry: String) -> Result(FsTree, Nil) {
-  let [specifier, name] = string.split(raw_entry, " ")
-
-  case specifier {
-    "dir" -> Error(Nil)
-    raw_size -> {
-      assert Ok(size) = int.parse(raw_size)
-      Ok(File(name, size))
+fn height_at(coord: Coord, in grid: Grid) -> Result(Int, Nil) {
+  case coord {
+    #(x, y) if x < 0 || y < 0 -> Error(Nil)
+    #(x, y) -> {
+      try row =
+        grid.rows
+        |> list.at(y)
+      row
+      |> list.at(x)
     }
   }
 }
 
-fn parse_inner(lines: List(String)) -> #(List(FsTree), List(String)) {
-  let [cmd, ..rest] = lines
+fn coord_towards(
+  direction direction: Direction,
+  from coord: Coord,
+  in grid: Grid,
+) -> Result(Coord, Nil) {
+  let new_coord = case direction, coord {
+    Up, #(x, y) -> #(x, y - 1)
+    Down, #(x, y) -> #(x, y + 1)
+    Left, #(x, y) -> #(x - 1, y)
+    Right, #(x, y) -> #(x + 1, y)
+  }
 
-  let #(output_lines, commands) =
-    rest
-    |> list.split_while(fn(line) { !string.starts_with(line, "$") })
-  let dir_content =
-    output_lines
-    |> list.filter_map(parse_directory_entry)
+  new_coord
+  |> height_at(in: grid)
+  |> result.replace(new_coord)
+}
 
-  case parse_command(cmd), commands {
-    CdUp, _ -> #([], commands)
-    Ls, [] -> #(dir_content, commands)
-    Ls, _ -> {
-      let #(inner, cmds) = parse_inner(commands)
-      #(
-        [dir_content, inner]
-        |> list.flatten,
-        cmds,
-      )
-    }
-    Cd(rel_dir), [] -> #([Dir(name: rel_dir, size: 0, sub_trees: [])], commands)
-    Cd(rel_dir), _ -> {
-      let #(inner, cmds) = parse_inner(rest)
-      let size =
-        inner
-        |> list.map(fs_size)
-        |> int.sum
-      #([Dir(name: rel_dir, size: size, sub_trees: inner)], cmds)
-    }
+type Direction {
+  Up
+  Down
+  Left
+  Right
+}
+
+fn max_height(
+  in grid: Grid,
+  for coord: Coord,
+  direction direction: Direction,
+  current_max current_height: Result(Int, Nil),
+) -> Result(Int, Nil) {
+  let next_coord_res = coord_towards(direction, from: coord, in: grid)
+  let next_height_res =
+    next_coord_res
+    |> result.then(apply: fn(c) { height_at(c, in: grid) })
+
+  case next_coord_res, next_height_res, current_height {
+    Ok(next_coord), Ok(next_height), Ok(height) ->
+      max_height(grid, next_coord, direction, Ok(int.max(next_height, height)))
+    Ok(next_coord), Ok(next_height), Error(Nil) ->
+      max_height(grid, next_coord, direction, Ok(next_height))
+    Error(_), Error(_), current_height -> current_height
   }
 }
 
-fn parse_file_system(lines: List(String)) -> List(FsTree) {
-  let [command, ..lines_rest] = lines
+fn is_visible_from(in grid: Grid, for coord: Coord) -> List(Direction) {
+  assert Ok(height) = height_at(coord, in: grid)
 
-  let #(output_lines, commands) =
-    lines_rest
-    |> list.split_while(fn(line) { !string.starts_with(line, "$") })
+  let visible_from =
+    [Up, Down, Left, Right]
+    |> list.map(fn(dir) {
+      let max_h =
+        max_height(
+          in: grid,
+          for: coord,
+          direction: dir,
+          current_max: Error(Nil),
+        )
+      case max_h {
+        Ok(h) if h >= height -> []
+        _ -> [dir]
+      }
+    })
+    |> list.flatten
 
-  let dir_content =
-    output_lines
-    |> list.filter_map(parse_directory_entry)
-
-  let #(current, rest) = case parse_command(command) {
-    Ls -> {
-      let #(inner, cmds) = parse_inner(commands)
-      #(
-        [dir_content, inner]
-        |> list.flatten,
-        cmds,
-      )
-    }
-    CdUp -> #([], commands)
-    Cd(rel_dir) -> {
-      let #(inner, cmds) = parse_inner(commands)
-      let size =
-        inner
-        |> list.map(fs_size)
-        |> int.sum
-      #([Dir(name: rel_dir, size: size, sub_trees: inner)], cmds)
-    }
-  }
-
-  case rest {
-    [] -> current
-    _ ->
-      [current, parse_file_system(rest)]
-      |> list.flatten
-  }
+  visible_from
 }
 
-fn get_dir_sizes(fs: FsTree) -> List(#(String, Int)) {
-  case fs {
-    File(_, _) -> []
-    Dir(name, size, subs) ->
-      subs
-      |> list.map(get_dir_sizes)
-      |> list.flatten
-      |> list.prepend(#(name, size))
-  }
+fn parse_grid(lines: List(String)) -> Grid {
+  let rows: List(List(Int)) =
+    lines
+    |> list.map(fn(line) {
+      let nums = string.to_graphemes(line)
+      assert Ok(parsed) =
+        nums
+        |> list.map(int.parse)
+        |> result.all
+      parsed
+    })
+
+  Grid(rows: rows)
 }
 
-fn format_fs(tree: FsTree, indent: String) -> List(String) {
-  case tree {
-    File(name, size) -> {
-      let output =
-        ["File", name, int.to_string(size)]
-        |> string.join(" ")
-      [indent <> output]
-    }
-    Dir(name, size, sub_trees) -> {
-      let dir_output = indent <> "Dir " <> name <> " " <> int.to_string(size)
-      let sub_fs_output =
-        sub_trees
-        |> list.map(fn(fs) { format_fs(fs, "  " <> indent) })
-        |> list.flatten
-      [dir_output, ..sub_fs_output]
-    }
-  }
+fn sum_is_visible(row_id y: Int, x_range: List(Int), in grid: Grid) -> Int {
+  x_range
+  |> list.map(fn(x) { is_visible_from(in: grid, for: #(x, y)) })
+  |> list.filter(fn(dirs) { !list.is_empty(dirs) })
+  |> list.length
 }
 
 pub fn main() {
-  let [_, ..lines] = load_input_lines()
+  let lines = load_input_lines()
 
-  let file_system =
-    lines
-    |> parse_file_system
-  let total_size =
-    file_system
-    |> list.map(fs_size)
-    |> int.sum
-  let root = Dir(name: "/", size: total_size, sub_trees: file_system)
+  let grid = parse_grid(lines)
 
-  format_fs(root, "")
-  |> list.each(io.println)
+  assert Ok(width) =
+    grid.rows
+    |> list.first
+    |> result.map(list.length)
 
-  let dir_sizes = get_dir_sizes(root)
-  let small_dirs =
-    dir_sizes
-    |> list.filter(fn(s) { s.1 <= max_dir_size })
-  small_dirs
-  |> list.map(io.debug)
-  small_dirs
-  |> list.map(fn(s) { s.1 })
+  let height =
+    grid.rows
+    |> list.length
+
+  let row_ids = list.range(0, height - 1)
+  let col_ids = list.range(0, width - 1)
+
+  row_ids
+  |> list.map(fn(row_id) { sum_is_visible(row_id, col_ids, grid) })
   |> int.sum
   |> io.debug
 }
