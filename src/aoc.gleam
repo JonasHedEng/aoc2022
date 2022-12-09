@@ -56,47 +56,36 @@ type Direction {
   Right
 }
 
-fn max_height(
+fn viewing_distance(
   in grid: Grid,
   for coord: Coord,
   direction direction: Direction,
-  current_max current_height: Result(Int, Nil),
-) -> Result(Int, Nil) {
+  from height: Int,
+) -> Int {
   let next_coord_res = coord_towards(direction, from: coord, in: grid)
   let next_height_res =
     next_coord_res
     |> result.then(apply: fn(c) { height_at(c, in: grid) })
 
-  case next_coord_res, next_height_res, current_height {
-    Ok(next_coord), Ok(next_height), Ok(height) ->
-      max_height(grid, next_coord, direction, Ok(int.max(next_height, height)))
-    Ok(next_coord), Ok(next_height), Error(Nil) ->
-      max_height(grid, next_coord, direction, Ok(next_height))
-    Error(_), Error(_), current_height -> current_height
+  case next_coord_res, next_height_res {
+    Ok(_), Ok(next_height) if next_height >= height -> 1
+    Ok(next_coord), Ok(next_height) ->
+      1 + viewing_distance(grid, next_coord, direction, height)
+    Error(_), Error(_) -> 0
   }
 }
 
-fn is_visible_from(in grid: Grid, for coord: Coord) -> List(Direction) {
+fn scenic_score(in grid: Grid, for coord: Coord) -> Int {
   assert Ok(height) = height_at(coord, in: grid)
 
-  let visible_from =
+  let score =
     [Up, Down, Left, Right]
     |> list.map(fn(dir) {
-      let max_h =
-        max_height(
-          in: grid,
-          for: coord,
-          direction: dir,
-          current_max: Error(Nil),
-        )
-      case max_h {
-        Ok(h) if h >= height -> []
-        _ -> [dir]
-      }
+      viewing_distance(in: grid, for: coord, direction: dir, from: height)
     })
-    |> list.flatten
+    |> int.product
 
-  visible_from
+  score
 }
 
 fn parse_grid(lines: List(String)) -> Grid {
@@ -114,16 +103,14 @@ fn parse_grid(lines: List(String)) -> Grid {
   Grid(rows: rows)
 }
 
-fn sum_is_visible(row_id y: Int, x_range: List(Int), in grid: Grid) -> Int {
+fn most_scenic(row_id y: Int, x_range: List(Int), in grid: Grid) -> Int {
   x_range
-  |> list.map(fn(x) { is_visible_from(in: grid, for: #(x, y)) })
-  |> list.filter(fn(dirs) { !list.is_empty(dirs) })
-  |> list.length
+  |> list.map(fn(x) { scenic_score(in: grid, for: #(x, y)) })
+  |> list.fold(0, int.max)
 }
 
 pub fn main() {
   let lines = load_input_lines()
-
   let grid = parse_grid(lines)
 
   assert Ok(width) =
@@ -139,7 +126,7 @@ pub fn main() {
   let col_ids = list.range(0, width - 1)
 
   row_ids
-  |> list.map(fn(row_id) { sum_is_visible(row_id, col_ids, grid) })
-  |> int.sum
+  |> list.map(fn(row_id) { most_scenic(row_id, col_ids, grid) })
+  |> list.fold(0, int.max)
   |> io.debug
 }
